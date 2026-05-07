@@ -30,7 +30,8 @@ import {
   RotateCcw,
   Coffee,
   Brain,
-  Zap
+  Zap,
+  Trash2
 } from 'lucide-react';
 
 // --- Types ---
@@ -75,7 +76,15 @@ const MOCK_TASKS: Task[] = [
 const CATEGORIES = ['Work', 'Personal', 'Health', 'Finance', 'Ideas'];
 const PRIORITIES: ('low' | 'medium' | 'high')[] = ['low', 'medium', 'high'];
 
-const aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+let aiClient: GoogleGenAI | null = null;
+const getAIClient = () => {
+  if (!aiClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+    aiClient = new GoogleGenAI({ apiKey });
+  }
+  return aiClient;
+};
 
 const createTaskDecl: FunctionDeclaration = {
   name: "createTask",
@@ -148,17 +157,26 @@ const AIAssistant = ({ isOpen, onClose, onAction }: {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const hasApiKey = !!process.env.GEMINI_API_KEY;
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
     
+    const client = getAIClient();
+    if (!client) {
+      setMessages(prev => [...prev, { role: 'user', content: input.trim() }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: "AI features require a GEMINI_API_KEY. Please add it to your project environment." }]);
+      setInput('');
+      return;
+    }
+
     const userMessage = input.trim();
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setInput('');
     setIsLoading(true);
 
     try {
-      const response = await aiClient.models.generateContent({
+      const response = await client.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
           { role: 'user', parts: [{ text: userMessage }] }
@@ -227,6 +245,17 @@ const AIAssistant = ({ isOpen, onClose, onAction }: {
 
             {/* Chat Messages */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {!hasApiKey && (
+                <div className="p-4 mb-2 bg-amber-50 border border-amber-100 rounded-3xl flex items-start gap-4">
+                  <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 shrink-0 mt-0.5">
+                    <Brain size={16} />
+                  </div>
+                  <div className="text-xs text-amber-800 leading-relaxed">
+                    <p className="font-bold mb-1 uppercase tracking-wider text-[10px]">AI Connectivity Link Missing</p>
+                    AI assistant features require a <code className="bg-amber-100/50 px-1 rounded">GEMINI_API_KEY</code>. Please add it to your environment variables.
+                  </div>
+                </div>
+              )}
               {messages.map((msg, i) => (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
@@ -795,9 +824,10 @@ const FocusTimer = () => {
   );
 };
 
-const Dashboard = ({ tasks, onToggleTask, onOpenCreator, onOpenAI }: { 
+const Dashboard = ({ tasks, onToggleTask, onDeleteTask, onOpenCreator, onOpenAI }: { 
   tasks: Task[]; 
   onToggleTask: (id: string) => void; 
+  onDeleteTask: (id: string) => void;
   onOpenCreator: () => void;
   onOpenAI: () => void;
 }) => (
@@ -905,9 +935,18 @@ const Dashboard = ({ tasks, onToggleTask, onOpenCreator, onOpenAI }: {
                 )}
               </div>
             </div>
-            {task.priority === 'high' && !task.completed && (
-              <div className="w-2 h-2 rounded-full bg-red-500 shadow-sm shadow-red-200"></div>
-            )}
+            {/* Actions */}
+            <div className="flex items-center gap-1">
+              <button 
+                onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+                className="p-2 text-slate-300 hover:text-red-500 active:scale-90 transition-all"
+              >
+                <Trash2 size={16} />
+              </button>
+              {task.priority === 'high' && !task.completed && (
+                <div className="w-2 h-2 rounded-full bg-red-500 shadow-sm shadow-red-200"></div>
+              )}
+            </div>
           </motion.div>
         )) : (
           <div className="flex flex-col items-center justify-center py-10 text-center space-y-4">
@@ -936,7 +975,7 @@ const Dashboard = ({ tasks, onToggleTask, onOpenCreator, onOpenAI }: {
   </div>
 );
 
-const Notes = ({ notes, onOpenCreator }: { notes: Note[]; onOpenCreator: () => void }) => (
+const Notes = ({ notes, onOpenCreator, onDelete }: { notes: Note[]; onOpenCreator: () => void; onDelete: (id: string) => void }) => (
   <div className="space-y-6 px-4 pb-20">
     <div className="flex justify-between items-center mb-8">
       <div>
@@ -961,10 +1000,15 @@ const Notes = ({ notes, onOpenCreator }: { notes: Note[]; onOpenCreator: () => v
         >
           <div>
             <div className="flex justify-between items-start mb-2">
-              <h3 className="font-bold text-slate-900 text-lg">{note.title}</h3>
-              <button className="p-1 hover:bg-black/5 rounded-lg active:scale-90 transition-transform">
-                <MoreVertical size={16} className="text-slate-600" />
-              </button>
+              <h3 className="font-bold text-slate-900 text-lg pr-8">{note.title}</h3>
+              <div className="flex gap-1 absolute top-4 right-4">
+                <button 
+                  onClick={() => onDelete(note.id)}
+                  className="p-2 hover:bg-red-500/10 rounded-lg active:scale-90 transition-all text-slate-600 hover:text-red-600"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </div>
             <p className="text-slate-700 text-sm line-clamp-3 leading-relaxed whitespace-pre-wrap">
               {note.content}
@@ -1207,13 +1251,14 @@ export default function App() {
               <Dashboard 
                 tasks={filteredTasks} 
                 onToggleTask={handleToggleTask} 
+                onDeleteTask={handleDeleteTask}
                 onOpenCreator={() => setIsCreatorOpen(true)} 
                 onOpenAI={() => setIsAIOpen(true)} 
               />
             )}
             {activeTab === 'calendar' && <CalendarView schedule={filteredSchedule} />}
             {activeTab === 'timer' && <FocusTimer />}
-            {activeTab === 'notes' && <Notes notes={filteredNotes} onOpenCreator={() => setIsNoteCreatorOpen(true)} />}
+            {activeTab === 'notes' && <Notes notes={filteredNotes} onOpenCreator={() => setIsNoteCreatorOpen(true)} onDelete={handleDeleteNote} />}
             {activeTab === 'settings' && <Settings />}
           </motion.div>
         </AnimatePresence>
